@@ -49,6 +49,12 @@ on:
       pre_fastlane_script:  { required: false, type: string, default: '',                     description: 'Optional bash to run before each fastlane stage (pre-materialized mode)' }
       runner_pool_linux:    { required: false, type: string, default: '["ubuntu-latest"]',    description: 'JSON-array runs-on for Linux/Android jobs. Pass `["self-hosted","macOS"]` for local Mac runner.' }
       runner_pool_mac:      { required: false, type: string, default: '["macos-14"]',         description: 'JSON-array runs-on for Apple jobs. Pass `["self-hosted","macOS"]` for local Mac runner.' }
+      # Additive flavor dimension — introduced @v1.0.47 (kmp-product-flavors epic, deploy-gha-product-flavors phase 4).
+      # EMPTY flavor = current v1.0.46 baseline behavior (single-flavor prod / assembleRelease). Consumers that do not
+      # pass `flavor:` are unaffected. Downstream publish-{android,apple}-kmp workflows must declare matching inputs
+      # (phase-4-followup); until then these values are silently ignored at the reusable-workflow boundary.
+      flavor:               { required: false, type: string, default: '',                     description: 'Product flavor to deploy (e.g. `prod`, `demo`). EMPTY (default) preserves v1.0.46 prod-baseline behavior — additive & back-compatible for consumers that do not pass it. Threaded to Android + Apple publish-* workflow calls.' }
+      build_type:           { required: false, type: string, default: 'release',              description: 'Gradle build type (`debug` | `staging` | `release`). Defaults to `release` for back-compat. Composed with `flavor` into the gradle variant (e.g. `demo` + `release` → assembleDemoRelease).' }
     secrets:
       google_services:          { required: false }
       firebase_creds:           { required: false }
@@ -106,6 +112,10 @@ on:
       pre_fastlane_script:  { required: false, type: string, default: '' }
       runner_pool_linux:    { required: false, type: string, default: '["ubuntu-latest"]' }
       runner_pool_mac:      { required: false, type: string, default: '["macos-14"]' }
+      # Mirror of the workflow_call `flavor` / `build_type` additions — free-text (`type: string`) to keep the
+      # workflow-dispatch UI aligned with the reusable-workflow surface. EMPTY flavor preserves v1.0.46 behavior.
+      flavor:               { required: false, type: string, default: '',                                                                    description: 'Product flavor (empty = prod baseline; e.g. `demo`). Additive, back-compat.' }
+      build_type:           { required: false, type: string, default: 'release',                                                             description: 'Gradle build type (`debug` | `staging` | `release`).' }
 
 jobs:
   version-resolve:
@@ -265,6 +275,12 @@ jobs:
       fastlane_cwd:         ${{ inputs.fastlane_cwd }}
       pre_fastlane_script:  ${{ inputs.pre_fastlane_script }}
       runner_pool:          ${{ inputs.runner_pool_linux }}
+      # TODO(phase-4-followup): therajanmaurya/mifos-x-actionhub-publish-android-kmp release-firebase.yaml
+      # must declare matching `flavor` + `build_type` workflow_call inputs and thread them into the
+      # `bundle exec fastlane android <lane>` invocation. Until then these two `with:` values are silently
+      # ignored at the reusable-workflow boundary — EMPTY-flavor callers still see identical @v1.0.46 behavior.
+      flavor:               ${{ inputs.flavor }}
+      build_type:           ${{ inputs.build_type }}
     # EXPLICIT secret map (NOT inherit). This chain is cross-ORG at every hop
     # (therajanmaurya consumer → openMF orchestrator → therajanmaurya publish).
     # `secrets: inherit` does NOT carry secrets across an organization boundary —
@@ -302,6 +318,11 @@ jobs:
       fastlane_cwd:         ${{ inputs.fastlane_cwd }}
       pre_fastlane_script:  ${{ inputs.pre_fastlane_script }}
       runner_pool:          ${{ inputs.runner_pool_linux }}
+      # TODO(phase-4-followup): therajanmaurya/mifos-x-actionhub-publish-android-kmp release.yaml (Play Store
+      # internal / beta / production ladder) must declare matching `flavor` + `build_type` inputs and thread them
+      # into the `bundle exec fastlane android <lane>` invocation. Silently ignored downstream until it does.
+      flavor:               ${{ inputs.flavor }}
+      build_type:           ${{ inputs.build_type }}
     # EXPLICIT secret map — see android-firebase rationale (cross-org inherit
     # drops secrets; explicit passing is the only reliable pattern).
     secrets:
@@ -359,6 +380,11 @@ jobs:
       fastlane_cwd:        ${{ inputs.fastlane_cwd }}
       pre_fastlane_script: ${{ inputs.pre_fastlane_script }}
       runner_pool:         ${{ inputs.runner_pool_mac }}
+      # TODO(phase-4-followup): therajanmaurya/mifos-x-actionhub-publish-apple-kmp release.yaml (iOS path)
+      # must declare matching `flavor` + `build_type` inputs and thread them into the fastlane iOS lane
+      # (scheme resolves to "{flavor}{BuildType}" e.g. `demoRelease`). Silently ignored downstream until it does.
+      flavor:              ${{ inputs.flavor }}
+      build_type:          ${{ inputs.build_type }}
     secrets:
       appstore_key_id:        ${{ secrets.appstore_key_id }}
       appstore_issuer_id:     ${{ secrets.appstore_issuer_id }}
@@ -380,6 +406,11 @@ jobs:
       version_tag:   ${{ needs.version-resolve.outputs.version }}
       starting_rung: ${{ inputs.mac_target }}
       runner_pool:   ${{ inputs.runner_pool_mac }}
+      # TODO(phase-4-followup): therajanmaurya/mifos-x-actionhub-publish-apple-kmp release.yaml (mac path)
+      # must declare matching `flavor` + `build_type` inputs and thread them into the fastlane mac lane.
+      # Silently ignored downstream until it does — EMPTY-flavor callers still see identical v1.0.46 behavior.
+      flavor:        ${{ inputs.flavor }}
+      build_type:    ${{ inputs.build_type }}
     secrets:
       appstore_key_id:        ${{ secrets.appstore_key_id }}
       appstore_issuer_id:     ${{ secrets.appstore_issuer_id }}
