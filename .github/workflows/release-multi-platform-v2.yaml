@@ -339,7 +339,7 @@ jobs:
     name: iOS · Firebase Distribution (Stage 0)
     if: ${{ inputs.ios_target == 'firebase+testflight' || inputs.ios_target == 'firebase' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.18
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.19
     with:
       platform:            ios
       package_name:        ${{ inputs.ios_package_name }}
@@ -367,7 +367,7 @@ jobs:
           || inputs.ios_target == 'beta'
           || inputs.ios_target == 'production' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.18
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.19
     with:
       platform:            ios
       package_name:        ${{ inputs.ios_package_name }}
@@ -396,7 +396,7 @@ jobs:
     name: macOS · Mac TF / Beta / MAS
     if: ${{ inputs.mac_target != 'skip' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.18
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.19
     with:
       platform:      mac
       package_name:  ${{ inputs.mac_package_name }}
@@ -405,6 +405,11 @@ jobs:
       starting_rung: ${{ inputs.mac_target }}
       fastlane_cwd:  ${{ inputs.fastlane_cwd }}
       mode:          ${{ inputs.fastlane_mode }}
+      # Mirror the iOS jobs: forward pre_fastlane_script so the apple release.yaml's
+      # pre-materialized setup step runs the consumer's proven .p8/local.properties
+      # materialization (the standard-mode self-materialize wrote to the wrong CWD
+      # → OpenSSL "invalid curve name" when load_api_key read a deployment-relative path).
+      pre_fastlane_script: ${{ inputs.pre_fastlane_script }}
       runner_pool:   ${{ inputs.runner_pool_mac }}
       # TODO(phase-4-followup): therajanmaurya/mifos-x-actionhub-publish-apple-kmp release.yaml (mac path)
       # must declare matching `flavor` + `build_type` inputs and thread them into the fastlane mac lane.
