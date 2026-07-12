@@ -260,6 +260,54 @@ jobs:
           fi
           echo "✅ macOS secrets present"
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # gh-release-init — create the prerelease + up-to-date changelog BEFORE platforms
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Guarantees the GitHub Release exists (seeded as a prerelease) with a fresh
+  # conventional-commit changelog, regardless of which platforms run this dispatch.
+  # Every platform's artifacts then accumulate onto this one release (see
+  # gh-release-finalize). Runs on the CONSUMER repo (github.repository) — reusable
+  # workflows execute in the caller's context, and github.token has contents:write.
+  gh-release-init:
+    name: GitHub Release · Init (prerelease + changelog)
+    needs: [version-resolve]
+    runs-on: ${{ fromJSON(inputs.runner_pool_linux) }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ inputs.target_branch }}
+      - name: Generate changelog + ensure prerelease exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION:  ${{ needs.version-resolve.outputs.version }}
+          BRANCH:   ${{ inputs.target_branch }}
+        run: |
+          set -euo pipefail
+          # Anchor = most-recent existing tag before VERSION (exclude VERSION/vVERSION itself).
+          PREV=$(git tag -l --sort=-creatordate | grep -v -F -x "$VERSION" | grep -v -F -x "v$VERSION" | head -1 || true)
+          RANGE="HEAD"; [[ -n "$PREV" ]] && RANGE="${PREV}..HEAD"
+          {
+            echo "## $VERSION"
+            echo ""
+            echo "Automated multi-platform release. Artifacts are attached as each platform build completes."
+            echo ""
+            if [[ -n "$PREV" ]]; then echo "### Changes since \`$PREV\`"; else echo "### Changes"; fi
+            echo ""
+            git log --no-merges --pretty='- %s (%h)' "$RANGE" 2>/dev/null | head -300 || echo "- (no commit history available)"
+          } > /tmp/CHANGELOG.md
+          echo "----- changelog -----"; cat /tmp/CHANGELOG.md; echo "---------------------"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release edit "$VERSION" --notes-file /tmp/CHANGELOG.md --prerelease
+            echo "ℹ️  Refreshed notes on existing release $VERSION."
+          else
+            gh release create "$VERSION" --title "$VERSION" --notes-file /tmp/CHANGELOG.md --prerelease --target "$BRANCH"
+            echo "🆕  Created prerelease $VERSION."
+          fi
+
   android-firebase:
     name: Android · Firebase Distribution (Stage 0)
     if: ${{ inputs.android_target == 'firebase+internal' || inputs.android_target == 'firebase' }}
@@ -269,7 +317,7 @@ jobs:
     # node, so pointing this job there ran nothing for Firebase. release-firebase.yaml has no rung
     # ladder (single Stage-0 Firebase deploy), hence no starting_rung / production_rollout. It
     # DOES declare flavor / build_type, so those are now genuinely consumed.
-    uses: therajanmaurya/mifos-x-actionhub-publish-android-kmp/.github/workflows/release-firebase.yaml@v2.0.22
+    uses: therajanmaurya/mifos-x-actionhub-publish-android-kmp/.github/workflows/release-firebase.yaml@v2.0.23
     with:
       android_package_name: ${{ inputs.android_package_name }}
       version_tag:          ${{ needs.version-resolve.outputs.version }}
@@ -306,7 +354,7 @@ jobs:
           || inputs.android_target == 'beta'
           || inputs.android_target == 'production' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-android-kmp/.github/workflows/release.yaml@v2.0.22
+    uses: therajanmaurya/mifos-x-actionhub-publish-android-kmp/.github/workflows/release.yaml@v2.0.23
     with:
       android_package_name: ${{ inputs.android_package_name }}
       version_tag:          ${{ needs.version-resolve.outputs.version }}
@@ -339,7 +387,7 @@ jobs:
     name: iOS · Firebase Distribution (Stage 0)
     if: ${{ inputs.ios_target == 'firebase+testflight' || inputs.ios_target == 'firebase' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.19
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.20
     with:
       platform:            ios
       package_name:        ${{ inputs.ios_package_name }}
@@ -367,7 +415,7 @@ jobs:
           || inputs.ios_target == 'beta'
           || inputs.ios_target == 'production' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.19
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.20
     with:
       platform:            ios
       package_name:        ${{ inputs.ios_package_name }}
@@ -396,7 +444,7 @@ jobs:
     name: macOS · Mac TF / Beta / MAS
     if: ${{ inputs.mac_target != 'skip' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.19
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.20
     with:
       platform:      mac
       package_name:  ${{ inputs.mac_package_name }}
@@ -470,7 +518,7 @@ jobs:
     name: Web · ${{ inputs.web_host }}
     if: ${{ inputs.web_target != 'skip' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-web-kmp/.github/workflows/release.yaml@v2.0.10
+    uses: therajanmaurya/mifos-x-actionhub-publish-web-kmp/.github/workflows/release.yaml@v2.0.11
     with:
       host:             ${{ inputs.web_host }}
       web_package_name: ${{ inputs.web_package_name }}
@@ -483,3 +531,69 @@ jobs:
       vercel_token:         ${{ secrets.vercel_token }}
       vercel_org_id:        ${{ secrets.vercel_org_id }}
       vercel_project_id:    ${{ secrets.vercel_project_id }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # gh-release-finalize — attach every platform artifact + promote prerelease→stable
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Runs AFTER every platform job (always(), so it fires even if some platforms are
+  # skipped or one fails). Downloads the `release-asset-*` workflow artifacts each
+  # platform build uploaded (APK, AAB, IPA, .pkg, web dist zip — desktop installers
+  # self-attach in their own repo), attaches them to the release with --clobber, and
+  # owns the FINAL prerelease/stable flags: the release becomes a STABLE latest
+  # release the moment ANY store deployment reaches production
+  # (android/ios/mac=production, web=production, desktop=stable); otherwise it stays
+  # a prerelease that accumulates artifacts across dispatches.
+  gh-release-finalize:
+    name: GitHub Release · Finalize (attach artifacts + promote)
+    needs:
+      - version-resolve
+      - gh-release-init
+      - android-firebase
+      - android-promote
+      - ios-firebase
+      - ios-promote
+      - mac
+      - desktop-win
+      - desktop-linux
+      - web
+    if: ${{ always() && needs.gh-release-init.result == 'success' }}
+    runs-on: ${{ fromJSON(inputs.runner_pool_linux) }}
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform artifacts (release-asset-*)
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/release-assets
+          pattern: release-asset-*
+          merge-multiple: true
+        continue-on-error: true
+      - name: Attach artifacts + set final prerelease/stable flags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION:  ${{ needs.version-resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+          FILES=(); for f in /tmp/release-assets/**/*; do [[ -f "$f" ]] && FILES+=("$f"); done
+          if [[ ${#FILES[@]} -gt 0 ]]; then
+            gh release upload "$VERSION" "${FILES[@]}" --clobber
+            echo "📎 Attached ${#FILES[@]} artifact(s):"; printf '   - %s\n' "${FILES[@]##*/}"
+          else
+            echo "ℹ️  No release-asset-* artifacts (platforms may self-attach, e.g. desktop installers)."
+          fi
+          # Promote prerelease → stable when ANY store deployment reached production.
+          PROD=false
+          [[ "${{ inputs.android_target }}"       == "production" ]] && PROD=true
+          [[ "${{ inputs.ios_target }}"           == "production" ]] && PROD=true
+          [[ "${{ inputs.mac_target }}"           == "production" ]] && PROD=true
+          [[ "${{ inputs.web_target }}"           == "production" ]] && PROD=true
+          [[ "${{ inputs.desktop_win_target }}"   == "stable"     ]] && PROD=true
+          [[ "${{ inputs.desktop_linux_target }}" == "stable"     ]] && PROD=true
+          if [[ "$PROD" == "true" ]]; then
+            gh release edit "$VERSION" --prerelease=false --latest
+            echo "🚀 $VERSION promoted → STABLE latest (a production target shipped this run)."
+          else
+            gh release edit "$VERSION" --prerelease --latest=false
+            echo "🔖 $VERSION stays PRERELEASE (no production target this run)."
+          fi
