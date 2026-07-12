@@ -571,6 +571,7 @@ jobs:
       - name: Attach artifacts + set final prerelease/stable flags
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO:  ${{ github.repository }}   # no checkout in this job → tell gh the repo explicitly
           VERSION:  ${{ needs.version-resolve.outputs.version }}
         run: |
           set -euo pipefail
