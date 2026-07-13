@@ -119,7 +119,7 @@ on:
 
 jobs:
   version-resolve:
-    name: Resolve version
+    name: Version
     runs-on: ${{ fromJSON(inputs.runner_pool_linux) }}
     outputs:
       version: ${{ steps.compute.outputs.version }}
@@ -158,7 +158,7 @@ jobs:
   # Without this, missing secrets silently pass through as empty strings and
   # die deep in Fastlane / Gradle / Play Console with confusing errors.
   validate-secrets:
-    name: Preflight · Validate required secrets per target
+    name: Preflight · Secrets
     runs-on: ${{ fromJSON(inputs.runner_pool_linux) }}
     steps:
       - name: Android — google_services + upload_keystore family
@@ -269,7 +269,7 @@ jobs:
   # gh-release-finalize). Runs on the CONSUMER repo (github.repository) — reusable
   # workflows execute in the caller's context, and github.token has contents:write.
   gh-release-init:
-    name: GitHub Release · Init (prerelease + changelog)
+    name: Release · Init
     needs: [version-resolve]
     runs-on: ${{ fromJSON(inputs.runner_pool_linux) }}
     permissions:
@@ -309,7 +309,7 @@ jobs:
           fi
 
   android-firebase:
-    name: Android · Firebase Distribution (Stage 0)
+    name: Android Firebase
     if: ${{ inputs.android_target == 'firebase+internal' || inputs.android_target == 'firebase' }}
     needs: [version-resolve, validate-secrets]
     # Firebase App Distribution is the DEDICATED, INDEPENDENT workflow (release-firebase.yaml)
@@ -317,7 +317,7 @@ jobs:
     # node, so pointing this job there ran nothing for Firebase. release-firebase.yaml has no rung
     # ladder (single Stage-0 Firebase deploy), hence no starting_rung / production_rollout. It
     # DOES declare flavor / build_type, so those are now genuinely consumed.
-    uses: therajanmaurya/mifos-x-actionhub-publish-android-kmp/.github/workflows/release-firebase.yaml@v2.0.23
+    uses: therajanmaurya/mifos-x-actionhub-publish-android-kmp/.github/workflows/release-firebase.yaml@v2.0.24
     with:
       android_package_name: ${{ inputs.android_package_name }}
       version_tag:          ${{ needs.version-resolve.outputs.version }}
@@ -347,14 +347,14 @@ jobs:
       SOPS_AGE_KEY:                 ${{ secrets.SOPS_AGE_KEY }}
 
   android-promote:
-    name: Android · Play Store (Internal / Beta / Production)
+    name: Android Play
     if: >-
       ${{ inputs.android_target == 'firebase+internal'
           || inputs.android_target == 'internal'
           || inputs.android_target == 'beta'
           || inputs.android_target == 'production' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-android-kmp/.github/workflows/release.yaml@v2.0.23
+    uses: therajanmaurya/mifos-x-actionhub-publish-android-kmp/.github/workflows/release.yaml@v2.0.24
     with:
       android_package_name: ${{ inputs.android_package_name }}
       version_tag:          ${{ needs.version-resolve.outputs.version }}
@@ -384,10 +384,10 @@ jobs:
       SOPS_AGE_KEY:                 ${{ secrets.SOPS_AGE_KEY }}
 
   ios-firebase:
-    name: iOS · Firebase Distribution (Stage 0)
+    name: iOS Firebase
     if: ${{ inputs.ios_target == 'firebase+testflight' || inputs.ios_target == 'firebase' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.20
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.21
     with:
       platform:            ios
       package_name:        ${{ inputs.ios_package_name }}
@@ -408,14 +408,14 @@ jobs:
       SOPS_AGE_KEY:           ${{ secrets.SOPS_AGE_KEY }}
 
   ios-promote:
-    name: iOS · TestFlight / Beta / App Store
+    name: iOS
     if: >-
       ${{ inputs.ios_target == 'firebase+testflight'
           || inputs.ios_target == 'internal'
           || inputs.ios_target == 'beta'
           || inputs.ios_target == 'production' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.20
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.21
     with:
       platform:            ios
       package_name:        ${{ inputs.ios_package_name }}
@@ -441,10 +441,10 @@ jobs:
       SOPS_AGE_KEY:           ${{ secrets.SOPS_AGE_KEY }}
 
   mac:
-    name: macOS · Mac TF / Beta / MAS
+    name: macOS
     if: ${{ inputs.mac_target != 'skip' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.20
+    uses: therajanmaurya/mifos-x-actionhub-publish-apple-kmp/.github/workflows/release.yaml@v2.0.21
     with:
       platform:      mac
       package_name:  ${{ inputs.mac_package_name }}
@@ -478,10 +478,10 @@ jobs:
       keychain_password:                  ${{ secrets.keychain_password }}
 
   desktop-win:
-    name: Desktop · Windows
+    name: Windows
     if: ${{ inputs.desktop_win_target != 'skip' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-desktop-kmp/.github/workflows/release.yaml@v2.0.10
+    uses: therajanmaurya/mifos-x-actionhub-publish-desktop-kmp/.github/workflows/release.yaml@v2.0.11
     with:
       target:               ${{ inputs.desktop_win_artifact }}
       desktop_package_name: ${{ inputs.desktop_package_name }}
@@ -500,10 +500,10 @@ jobs:
       microsoft_store_client_secret:  ${{ secrets.microsoft_store_client_secret }}
 
   desktop-linux:
-    name: Desktop · Linux
+    name: Linux
     if: ${{ inputs.desktop_linux_target != 'skip' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-desktop-kmp/.github/workflows/release.yaml@v2.0.10
+    uses: therajanmaurya/mifos-x-actionhub-publish-desktop-kmp/.github/workflows/release.yaml@v2.0.11
     with:
       target:               linux-deb
       desktop_package_name: ${{ inputs.desktop_package_name }}
@@ -515,10 +515,10 @@ jobs:
     secrets: {}
 
   web:
-    name: Web · ${{ inputs.web_host }}
+    name: Web
     if: ${{ inputs.web_target != 'skip' }}
     needs: [version-resolve, validate-secrets]
-    uses: therajanmaurya/mifos-x-actionhub-publish-web-kmp/.github/workflows/release.yaml@v2.0.11
+    uses: therajanmaurya/mifos-x-actionhub-publish-web-kmp/.github/workflows/release.yaml@v2.0.12
     with:
       host:             ${{ inputs.web_host }}
       web_package_name: ${{ inputs.web_package_name }}
@@ -544,7 +544,7 @@ jobs:
   # (android/ios/mac=production, web=production, desktop=stable); otherwise it stays
   # a prerelease that accumulates artifacts across dispatches.
   gh-release-finalize:
-    name: GitHub Release · Finalize (attach artifacts + promote)
+    name: Release · Finalize
     needs:
       - version-resolve
       - gh-release-init
