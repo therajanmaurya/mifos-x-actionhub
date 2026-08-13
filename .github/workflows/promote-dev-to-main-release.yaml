@@ -1,0 +1,152 @@
+# .github/workflows/promote-dev-to-main-release.yaml
+#
+# Manually-triggered release: promote dev → main, tag it, cut a GitHub Release,
+# and open the next in-development version on dev.
+#
+# BRANCH MODEL
+#   dev  — development (default branch). All PRs merge here.
+#   main — the released line. Consumers pin `@vX.Y.Z` tags cut FROM main.
+#
+# "Rebase main with dev" here means: main's TREE is set to dev's tree exactly, via a
+# merge commit whose parents are [old-main, dev]. This is:
+#   • conflict-free      (tree is copied, never 3-way merged),
+#   • non-destructive    (old-main is a parent → fast-forward push, no --force),
+#   • history-linked     (dev becomes an ancestor of main; future promotes stay clean),
+#   • correct for the current state where main and dev are UNRELATED histories
+#     (the copy-tree approach needs no common ancestor).
+#
+# TOKEN
+#   Promoting dev's `.github/workflows/**` changes onto main requires a PAT with the
+#   `workflow` scope — GITHUB_TOKEN is forbidden from writing workflow files. Store it as
+#   the `RELEASE_TOKEN` secret. Falls back to github.token when no workflow files change.
+name: Release · Promote dev → main
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Semver bump for this release (ignored if release_version is set)'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      release_version:
+        description: 'Explicit version e.g. v1.0.30 (overrides bump; leave blank to auto-compute)'
+        type: string
+        required: false
+      dry_run:
+        description: 'Compute + log only — no push, tag, release, or bump'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# One release at a time; never cancel a release mid-flight.
+concurrency:
+  group: promote-dev-to-main
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          persist-credentials: true
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compute release + next version
+        id: ver
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          LATEST=${LATEST:-v1.0.0}
+          if [ -n "${{ inputs.release_version }}" ]; then
+            REL="${{ inputs.release_version }}"
+            case "$REL" in v*) ;; *) REL="v$REL" ;; esac
+          else
+            ver=${LATEST#v}
+            MA=${ver%%.*}; rest=${ver#*.}; MI=${rest%%.*}; PA=${rest##*.}
+            case "${{ inputs.bump }}" in
+              major) MA=$((MA+1)); MI=0; PA=0 ;;
+              minor) MI=$((MI+1)); PA=0 ;;
+              *)     PA=$((PA+1)) ;;
+            esac
+            REL="v${MA}.${MI}.${PA}"
+          fi
+          echo "$REL" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::not semver: $REL"; exit 1; }
+          if git rev-parse -q --verify "refs/tags/$REL" >/dev/null; then
+            echo "::error::tag $REL already exists — pick a higher version"; exit 1
+          fi
+          rv=${REL#v}; a=${rv%%.*}; r=${rv#*.}; b=${r%%.*}; c=${r##*.}
+          NEXT="v${a}.${b}.$((c+1))"
+          {
+            echo "release=$REL"
+            echo "next=$NEXT"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release plan"
+            echo "- previous released tag: \`$LATEST\`"
+            echo "- **this release: \`$REL\`**"
+            echo "- next dev version: \`$NEXT\`"
+            echo "- dry run: \`${{ inputs.dry_run }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Promote dev → main  (main tree := dev tree, non-force, history-linked)
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          git fetch origin dev --quiet
+          DEV=$(git rev-parse origin/dev)
+          TREE=$(git rev-parse "$DEV^{tree}")
+          if git ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+            git fetch origin main --quiet
+            MAIN=$(git rev-parse origin/main)
+            if [ "$(git rev-parse "$MAIN^{tree}")" = "$TREE" ]; then
+              echo "main already carries dev's tree — nothing to promote."
+              NEW=$MAIN
+            else
+              NEW=$(git commit-tree "$TREE" -p "$MAIN" -p "$DEV" \
+                    -m "release(${{ steps.ver.outputs.release }}): promote dev → main")
+            fi
+          else
+            NEW=$DEV
+          fi
+          git push origin "$NEW:refs/heads/main"
+          echo "MAIN_SHA=$NEW" >> "$GITHUB_ENV"
+
+      - name: Tag + GitHub Release on main
+        if: ${{ inputs.dry_run == false }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          REL='${{ steps.ver.outputs.release }}'
+          git tag -a "$REL" "$MAIN_SHA" -m "$REL"
+          git push origin "refs/tags/$REL"
+          gh release create "$REL" --verify-tag --title "$REL" --generate-notes --latest
+          echo "released **$REL** on main @ \`$MAIN_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open next dev version (bump VERSION on dev)
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          git fetch origin dev --quiet
+          git checkout -B dev origin/dev
+          echo "${{ steps.ver.outputs.next }}" > VERSION
+          git add VERSION
+          if git diff --cached --quiet; then
+            echo "VERSION already ${{ steps.ver.outputs.next }} — no bump commit."
+          else
+            git commit -m "chore(release): open ${{ steps.ver.outputs.next }} development cycle [skip ci]"
+            git push origin dev
+          fi
