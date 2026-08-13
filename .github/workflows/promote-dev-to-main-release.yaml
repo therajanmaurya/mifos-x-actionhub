@@ -8,9 +8,11 @@
 #   main — the released line. Consumers pin the `@vX.Y.Z` tags cut FROM main.
 #
 # VERSIONING (dogfoods the org's shared actions)
-#   • Resolve  → MobileByteLabs/mbl-actionhub-resolve-version (github-releases mode).
-#                GitHub Releases on `main` are the source of truth; Maven checks are off
-#                because the actionhub is not a Maven artifact.
+#   • Resolve  → MobileByteLabs/mbl-actionhub-resolve-version (github-releases mode) for the
+#                bump intent + explicit-override, THEN floored at the highest existing git tag
+#                (Releases can lag tags — currently Releases stop at v1.0.47 while tags reach
+#                v1.0.61 — so tags are the authoritative uniqueness source). Maven checks off
+#                (the actionhub is not a Maven artifact).
 #   • Bump     → MobileByteLabs/mbl-actionhub-bump-version opens a PR on dev advancing the
 #                human-visible `version.properties` marker after the release.
 #   The dev→main promotion itself is bespoke (no action covers a two-unrelated-histories
@@ -83,23 +85,43 @@ jobs:
           verify-against-maven: 'false'
           tag-pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+$'
 
+      # Tag-authoritative floor. GitHub Releases can lag tags (in this repo, Releases stop at
+      # v1.0.47 while tags run to v1.0.61), so the resolver's Releases-based proposal may
+      # undershoot. Floor the version at latest-tag+bump and take the higher of that vs. the
+      # resolver's intent — guaranteeing the release never collides with / regresses below an
+      # existing tag. Once a release publishes tag+Release together, the two converge and the
+      # resolver becomes authoritative on its own.
       - name: Normalize + guard version
         id: ver
         run: |
           set -euo pipefail
-          RAW='${{ steps.resolve.outputs.version }}'
-          NUM=${RAW#v}
-          echo "$NUM" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::resolver returned non-semver: '$RAW'"; exit 1; }
-          TAG="v$NUM"
           git fetch --tags --force --quiet
+          RAW='${{ steps.resolve.outputs.version }}'
+          RNUM=${RAW#v}
+          echo "$RNUM" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::resolver returned non-semver: '$RAW'"; exit 1; }
+          if [ -n "${{ inputs.release_version }}" ]; then
+            # Explicit override: honor exactly; collision-guard only.
+            NUM=$RNUM
+          else
+            LT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1); LT=${LT#v}; LT=${LT:-0.0.0}
+            a=${LT%%.*}; r=${LT#*.}; b=${r%%.*}; c=${r##*.}
+            case "${{ inputs.bump }}" in
+              major) FLOOR="$((a+1)).0.0" ;;
+              minor) FLOOR="${a}.$((b+1)).0" ;;
+              *)     FLOOR="${a}.${b}.$((c+1))" ;;
+            esac
+            NUM=$(printf '%s\n%s\n' "$RNUM" "$FLOOR" | sort -V | tail -1)
+          fi
+          TAG="v$NUM"
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "::error::tag $TAG already exists (resolver source: ${{ steps.resolve.outputs.source }}). Pass a higher release_version."; exit 1
+            echo "::error::tag $TAG already exists — pass a higher release_version."; exit 1
           fi
           echo "num=$NUM" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           {
             echo "## Release plan"
-            echo "- resolver source: \`${{ steps.resolve.outputs.source }}\`  current: \`${{ steps.resolve.outputs.current }}\`"
+            echo "- resolver: \`${{ steps.resolve.outputs.version }}\` (source \`${{ steps.resolve.outputs.source }}\`, current \`${{ steps.resolve.outputs.current }}\`)"
+            echo "- highest existing tag floored the result (Releases lag tags in this repo)"
             echo "- **this release: \`$TAG\`**"
             echo "- dry run: \`${{ inputs.dry_run }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
