@@ -5,20 +5,26 @@
 #
 # BRANCH MODEL
 #   dev  — development (default branch). All PRs merge here.
-#   main — the released line. Consumers pin `@vX.Y.Z` tags cut FROM main.
+#   main — the released line. Consumers pin the `@vX.Y.Z` tags cut FROM main.
 #
-# "Rebase main with dev" here means: main's TREE is set to dev's tree exactly, via a
-# merge commit whose parents are [old-main, dev]. This is:
-#   • conflict-free      (tree is copied, never 3-way merged),
-#   • non-destructive    (old-main is a parent → fast-forward push, no --force),
-#   • history-linked     (dev becomes an ancestor of main; future promotes stay clean),
-#   • correct for the current state where main and dev are UNRELATED histories
-#     (the copy-tree approach needs no common ancestor).
+# VERSIONING (dogfoods the org's shared actions)
+#   • Resolve  → MobileByteLabs/mbl-actionhub-resolve-version (github-releases mode).
+#                GitHub Releases on `main` are the source of truth; Maven checks are off
+#                because the actionhub is not a Maven artifact.
+#   • Bump     → MobileByteLabs/mbl-actionhub-bump-version opens a PR on dev advancing the
+#                human-visible `version.properties` marker after the release.
+#   The dev→main promotion itself is bespoke (no action covers a two-unrelated-histories
+#   tree promotion) — see the "Promote" step.
+#
+# "Rebase main with dev" == set main's TREE to dev's tree via a merge commit
+# (`git commit-tree <dev-tree> -p main -p dev`): conflict-free, non-force (old main is a
+# parent → fast-forward push), history-linked, and valid even though main and dev are
+# currently unrelated histories.
 #
 # TOKEN
-#   Promoting dev's `.github/workflows/**` changes onto main requires a PAT with the
-#   `workflow` scope — GITHUB_TOKEN is forbidden from writing workflow files. Store it as
-#   the `RELEASE_TOKEN` secret. Falls back to github.token when no workflow files change.
+#   Promoting dev's `.github/workflows/**` onto main requires a PAT with the `workflow`
+#   scope (GITHUB_TOKEN may not write workflow files). Store it as `RELEASE_TOKEN`; the
+#   workflow falls back to github.token when a release carries no workflow-file changes.
 name: Release · Promote dev → main
 
 on:
@@ -30,18 +36,18 @@ on:
         options: [patch, minor, major]
         default: patch
       release_version:
-        description: 'Explicit version e.g. v1.0.30 (overrides bump; leave blank to auto-compute)'
+        description: 'Explicit version e.g. v1.0.30 (overrides bump; blank = auto)'
         type: string
         required: false
       dry_run:
-        description: 'Compute + log only — no push, tag, release, or bump'
+        description: 'Resolve + log only — no push, tag, release, or bump'
         type: boolean
         default: false
 
 permissions:
   contents: write
+  pull-requests: write
 
-# One release at a time; never cancel a release mid-flight.
 concurrency:
   group: promote-dev-to-main
   cancel-in-progress: false
@@ -63,41 +69,38 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Compute release + next version
+      # Source of truth = GitHub Releases on this repo. Maven verification disabled (not a
+      # Maven artifact); group-id/artifact-id are required inputs but unused in this mode.
+      - name: Resolve release version
+        id: resolve
+        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.2.0
+        with:
+          group-id: openMF
+          artifact-id: mifos-x-actionhub
+          version-source: github-releases
+          bump: ${{ inputs.bump }}
+          version: ${{ inputs.release_version }}
+          verify-against-maven: 'false'
+          tag-pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+$'
+
+      - name: Normalize + guard version
         id: ver
         run: |
           set -euo pipefail
+          RAW='${{ steps.resolve.outputs.version }}'
+          NUM=${RAW#v}
+          echo "$NUM" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::resolver returned non-semver: '$RAW'"; exit 1; }
+          TAG="v$NUM"
           git fetch --tags --force --quiet
-          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
-          LATEST=${LATEST:-v1.0.0}
-          if [ -n "${{ inputs.release_version }}" ]; then
-            REL="${{ inputs.release_version }}"
-            case "$REL" in v*) ;; *) REL="v$REL" ;; esac
-          else
-            ver=${LATEST#v}
-            MA=${ver%%.*}; rest=${ver#*.}; MI=${rest%%.*}; PA=${rest##*.}
-            case "${{ inputs.bump }}" in
-              major) MA=$((MA+1)); MI=0; PA=0 ;;
-              minor) MI=$((MI+1)); PA=0 ;;
-              *)     PA=$((PA+1)) ;;
-            esac
-            REL="v${MA}.${MI}.${PA}"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag $TAG already exists (resolver source: ${{ steps.resolve.outputs.source }}). Pass a higher release_version."; exit 1
           fi
-          echo "$REL" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::not semver: $REL"; exit 1; }
-          if git rev-parse -q --verify "refs/tags/$REL" >/dev/null; then
-            echo "::error::tag $REL already exists — pick a higher version"; exit 1
-          fi
-          rv=${REL#v}; a=${rv%%.*}; r=${rv#*.}; b=${r%%.*}; c=${r##*.}
-          NEXT="v${a}.${b}.$((c+1))"
-          {
-            echo "release=$REL"
-            echo "next=$NEXT"
-          } >> "$GITHUB_OUTPUT"
+          echo "num=$NUM" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           {
             echo "## Release plan"
-            echo "- previous released tag: \`$LATEST\`"
-            echo "- **this release: \`$REL\`**"
-            echo "- next dev version: \`$NEXT\`"
+            echo "- resolver source: \`${{ steps.resolve.outputs.source }}\`  current: \`${{ steps.resolve.outputs.current }}\`"
+            echo "- **this release: \`$TAG\`**"
             echo "- dry run: \`${{ inputs.dry_run }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -116,7 +119,7 @@ jobs:
               NEW=$MAIN
             else
               NEW=$(git commit-tree "$TREE" -p "$MAIN" -p "$DEV" \
-                    -m "release(${{ steps.ver.outputs.release }}): promote dev → main")
+                    -m "release(${{ steps.ver.outputs.tag }}): promote dev → main")
             fi
           else
             NEW=$DEV
@@ -130,23 +133,22 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          REL='${{ steps.ver.outputs.release }}'
-          git tag -a "$REL" "$MAIN_SHA" -m "$REL"
-          git push origin "refs/tags/$REL"
-          gh release create "$REL" --verify-tag --title "$REL" --generate-notes --latest
-          echo "released **$REL** on main @ \`$MAIN_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          TAG='${{ steps.ver.outputs.tag }}'
+          git tag -a "$TAG" "$MAIN_SHA" -m "$TAG"
+          git push origin "refs/tags/$TAG"
+          gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --latest
+          echo "released **$TAG** on main @ \`$MAIN_SHA\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Open next dev version (bump VERSION on dev)
+      # Post-release: PR on dev advancing the human-visible marker to the next patch.
+      # SoT remains the Releases above; this file is not read back by the resolver.
+      - name: Bump next dev version (PR on dev)
         if: ${{ inputs.dry_run == false }}
-        run: |
-          set -euo pipefail
-          git fetch origin dev --quiet
-          git checkout -B dev origin/dev
-          echo "${{ steps.ver.outputs.next }}" > VERSION
-          git add VERSION
-          if git diff --cached --quiet; then
-            echo "VERSION already ${{ steps.ver.outputs.next }} — no bump commit."
-          else
-            git commit -m "chore(release): open ${{ steps.ver.outputs.next }} development cycle [skip ci]"
-            git push origin dev
-          fi
+        uses: MobileByteLabs/mbl-actionhub-bump-version@v1.6.0
+        with:
+          published-version: ${{ steps.ver.outputs.num }}
+          properties-path: version.properties
+          properties-key: actionhub.version
+          bump-type: patch
+          base-branch: dev
+          auto-merge: 'true'
+          github-token: ${{ secrets.RELEASE_TOKEN || github.token }}
