@@ -16,8 +16,8 @@ on:
       desktop_package_name: { required: false, type: string, default: 'cmp-desktop' }
       web_package_name:     { required: false, type: string, default: 'cmp-web' }
       java-version:         { required: false, type: string, default: '17' }
-      xcode_version:        { required: false, type: string, default: '26.0', description: 'Xcode for the iOS PR-check (iOS 26 SDK exports the symbols CMP 1.11 references).' }
-      macos_runner:         { required: false, type: string, default: 'macos-15', description: 'Runner image for the iOS PR-check job (macos-15 ships Xcode 26).' }
+      xcode_version:        { required: false, type: string, default: '26.5', description: 'Xcode to select for the iOS PR-check — a 26.x is required for the iOS 26 SDK symbols CMP 1.11 references. Pre-installed on macos-26; falls back to the runner default if absent.' }
+      macos_runner:         { required: false, type: string, default: 'macos-26', description: 'Runner image for the iOS PR-check job. macos-26 (Tahoe) is GA + the macos-latest default since 2026-06 and ships Xcode 26.x pre-installed.' }
     outputs:
       android_pass:
         value: ${{ jobs.android.result == 'success' || jobs.android.result == 'skipped' }}
@@ -60,8 +60,14 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: zulu, java-version: '${{ inputs.java-version }}' }
       - uses: gradle/actions/setup-gradle@v3
-      - uses: maxim-lobanov/setup-xcode@v1
-        with: { xcode-version: '${{ inputs.xcode_version }}' }
+      # macos-26 ships Xcode 26.x pre-installed, so SELECT it (instant) rather than
+      # maxim-lobanov/setup-xcode (which may download + is slow). Guarded: fall back to the runner
+      # default if the pinned app isn't present, so a future runner-image reshuffle can't hard-fail.
+      - name: Select Xcode ${{ inputs.xcode_version }}
+        run: |
+          APP="/Applications/Xcode_${{ inputs.xcode_version }}.app"
+          if [ -d "$APP" ]; then sudo xcode-select -s "$APP"; else echo "note: $APP absent — using runner default"; fi
+          xcodebuild -version
       - uses: ruby/setup-ruby@v1
         with: { ruby-version: '3.3', bundler-cache: true }
       # ~/.konan (Kotlin/Native toolchain + platform klibs) is the biggest cold-run cost of an iOS
