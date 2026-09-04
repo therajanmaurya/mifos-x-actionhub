@@ -123,7 +123,7 @@ jobs:
           upload_keystore:         ${{ secrets.upload_keystore }}
           keystore_password:       ${{ secrets.keystore_password }}
           keystore_alias:          ${{ secrets.keystore_alias }}
-          keystore_alias_password: ${{ secrets.keystore_alias_password }}
+          keystore_alias_password: ${{ secrets.keystore_alias_password || secrets.keystore_password }}
         run: |
           MISSING=()
           # All targets need keystore + google services
@@ -131,7 +131,14 @@ jobs:
           [[ -z "${upload_keystore:-}" ]]         && MISSING+=("upload_keystore")
           [[ -z "${keystore_password:-}" ]]       && MISSING+=("keystore_password")
           [[ -z "${keystore_alias:-}" ]]          && MISSING+=("keystore_alias")
-          [[ -z "${keystore_alias_password:-}" ]] && MISSING+=("keystore_alias_password")
+          # keystore_alias_password is NOT independently required. A PKCS12 keystore (keytool's
+          # default) has no separate key password — keytool discards `-keypass` at creation — so it
+          # is the same credential as keystore_password and is defaulted from it above. Demanding it
+          # separately rejected correctly-provisioned single-password keystores. It is still checked
+          # for emptiness, because an EMPTY key password fails signing ("key associated with <alias>
+          # not a private key") rather than being ignored — but keystore_password satisfies it.
+          [[ -z "${keystore_alias_password:-}" && -z "${keystore_password:-}" ]] \
+            && MISSING+=("keystore_alias_password (or keystore_password)")
 
           # Firebase stage needs firebase_creds
           if [[ "${{ inputs.android_target }}" == "firebase+internal" || "${{ inputs.android_target }}" == "firebase" ]]; then
@@ -234,7 +241,9 @@ jobs:
       upload_keystore:          ${{ secrets.upload_keystore }}
       keystore_password:        ${{ secrets.keystore_password }}
       keystore_alias:           ${{ secrets.keystore_alias }}
-      keystore_alias_password:  ${{ secrets.keystore_alias_password }}
+      # PKCS12 has no separate key password — default it from the store password so a caller
+      # that sends only keystore_password still signs. Empty would FAIL, not be ignored.
+      keystore_alias_password:  ${{ secrets.keystore_alias_password || secrets.keystore_password }}
       SOPS_AGE_KEY:             ${{ secrets.SOPS_AGE_KEY }}
 
   android-promote:
@@ -262,7 +271,9 @@ jobs:
       upload_keystore:          ${{ secrets.upload_keystore }}
       keystore_password:        ${{ secrets.keystore_password }}
       keystore_alias:           ${{ secrets.keystore_alias }}
-      keystore_alias_password:  ${{ secrets.keystore_alias_password }}
+      # PKCS12 has no separate key password — default it from the store password so a caller
+      # that sends only keystore_password still signs. Empty would FAIL, not be ignored.
+      keystore_alias_password:  ${{ secrets.keystore_alias_password || secrets.keystore_password }}
       SOPS_AGE_KEY:             ${{ secrets.SOPS_AGE_KEY }}
 
   ios-firebase:
