@@ -24,7 +24,12 @@ on:
       upload_keystore:          { required: true }
       keystore_password:        { required: true }
       keystore_alias:           { required: true }
-      keystore_alias_password:  { required: true }
+      # NOT required: a PKCS12 keystore (keytool's default) has no separate key password — keytool
+      # discards `-keypass` at creation with "Different store and key passwords not supported for
+      # PKCS12 KeyStores". Callers passing only keystore_password are correct, and requiring this
+      # rejected them at the contract boundary. Tier 3 (publish-android-kmp) already declares it
+      # optional and defaults it from keystore_password.
+      keystore_alias_password:  { required: false }
 
   workflow_dispatch:
     inputs:
